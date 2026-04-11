@@ -1,4 +1,5 @@
 require("dotenv").config()
+
 const {
   default: makeWASocket,
   useMultiFileAuthState,
@@ -12,9 +13,21 @@ const qrcode = require("qrcode-terminal")
 
 // 🔑 OPENROUTER API KEY
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY
+
 // ✍️ SIGNATURE
 const SIGNATURE =
-  "\n\n🤖 *This AI was created by Praise Ayantunde*\n🎓 *A Student of Federal University of Technology, Akure 🎓*"
+  "\n\n🤖 This AI was created by Praise Ayantunde\n🎓 Student of Innovation & Technology"
+
+
+// ⚠️ ADDED: SAFE ERROR HANDLERS (NEW)
+process.on("uncaughtException", (err) => {
+  console.log("⚠️ Uncaught Exception:", err.message)
+})
+
+process.on("unhandledRejection", (err) => {
+  console.log("⚠️ Unhandled Rejection:", err)
+})
+
 
 async function startBot() {
   console.log("🚀 Starting LEGENDARY AI (STABLE VERSION)...")
@@ -31,8 +44,15 @@ async function startBot() {
 
   console.log("🔄 Socket created... waiting for connection")
 
+  // ⚠️ ADDED: HEARTBEAT (NEW)
+  setInterval(() => {
+    console.log("💓 LEGENDARY AI still alive...")
+  }, 60000)
+
+
   sock.ev.on("connection.update", (update) => {
     const { connection, lastDisconnect, qr } = update
+
     console.log("📶 connection =", connection)
 
     if (qr) {
@@ -54,26 +74,29 @@ async function startBot() {
       if (code !== DisconnectReason.loggedOut) {
         console.log("♻️ Restarting bot in 5s...")
         setTimeout(startBot, 5000)
+      } else {
+        console.log("🚨 Logged out - scan QR again")
       }
     }
   })
 
   sock.ev.on("creds.update", saveCreds)
 
+
+  // 💬 MESSAGE HANDLER (ONLY FIXED FOR STABILITY)
   sock.ev.on("messages.upsert", async (m) => {
-    const msg = m.messages[0]
-    if (!msg.message || msg.key.fromMe) return
-
-    const text =
-      msg.message.conversation ||
-      msg.message.extendedTextMessage?.text
-
-    if (!text) return
-
     try {
+      const msg = m.messages[0]
+      if (!msg.message || msg.key.fromMe) return
+
+      const text =
+        msg.message.conversation ||
+        msg.message.extendedTextMessage?.text
+
+      if (!text) return
+
       console.log("💬 Message:", text)
 
-      // 🤖 OPENROUTER AI REQUEST (FIXED)
       const response = await axios.post(
         "https://openrouter.ai/api/v1/chat/completions",
         {
@@ -91,13 +114,14 @@ async function startBot() {
             "Content-Type": "application/json",
             "HTTP-Referer": "https://localhost",
             "X-Title": "Legendary AI Bot"
-          }
+          },
+          timeout: 30000
         }
       )
 
       let reply =
         response.data?.choices?.[0]?.message?.content ||
-        "⚠️ AI no respond, try again."
+        "⚠️ No response from AI"
 
       reply += SIGNATURE
 
@@ -110,6 +134,12 @@ async function startBot() {
 }
 
 startBot()
+
+
+// 🌐 KEEP ALIVE SERVER (RENDER REQUIRED)
 require("http")
-  .createServer((req, res) => res.end("Bot is running"))
+  .createServer((req, res) => {
+    res.end("Bot is running 🚀")
+  })
   .listen(process.env.PORT || 3000)
+
