@@ -14,16 +14,19 @@ const franc = require("franc")
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY
 
-// ================= CONFIG =================
-const SIGNATURE =
-  "\n\n🤖 This AI Was Created By Praise Ayantunde\n🎓 Federal University Of Technology, Akure"
+// ================= LOCKS =================
+let botStarted = false
+let isRestarting = false
 
 // ================= STATE =================
 const memory = new Map()
 const messageQueue = []
 let processing = false
-let isRestarting = false
 const userCooldown = new Map()
+
+// ================= CONFIG =================
+const SIGNATURE =
+  "\n\n🤖 This AI Was Created By Praise Ayantunde\n🎓 Federal University Of Technology, Akure"
 
 // ================= TIME =================
 const getTime = (zone = "Africa/Lagos") =>
@@ -44,7 +47,7 @@ const detectLanguage = (text) => {
   return "english"
 }
 
-// ================= WEB SEARCH =================
+// ================= WEB =================
 const searchWeb = async (query) => {
   try {
     const res = await axios.get(
@@ -56,8 +59,13 @@ const searchWeb = async (query) => {
   }
 }
 
-// ================= BOT START =================
+// ================= BOT =================
 async function startBot() {
+
+  // 🚨 PREVENT MULTIPLE INSTANCES (FIX 440 LOOP ROOT CAUSE)
+  if (botStarted) return
+  botStarted = true
+
   console.log("🚀 LEGENDARY AI STARTED")
 
   const { state, saveCreds } = await useMultiFileAuthState("auth_info")
@@ -76,10 +84,7 @@ async function startBot() {
 
     console.log("📶 Connection:", connection)
 
-    if (qr) {
-      console.log("📱 Scan QR")
-      qrcode.generate(qr, { small: true })
-    }
+    if (qr) qrcode.generate(qr, { small: true })
 
     if (connection === "close") {
       const code =
@@ -88,15 +93,23 @@ async function startBot() {
 
       console.log("❌ Closed:", code)
 
-      // 🚨 SAFE RECONNECT (FIXED LOOP ISSUE)
+      // 🚨 IMPORTANT FIX FOR 440
+      if (code === 440) {
+        console.log("🚨 Session conflict (440). Delete auth_info and rescan QR.")
+        botStarted = false
+        return
+      }
+
+      // SAFE RECONNECT ONLY
       if (!isRestarting && code !== DisconnectReason.loggedOut) {
         isRestarting = true
-        console.log("♻️ Safe reconnect in 8s...")
+        console.log("♻️ Safe reconnect in 10s...")
 
         setTimeout(() => {
           isRestarting = false
+          botStarted = false
           startBot()
-        }, 8000)
+        }, 10000)
       } else {
         console.log("🚨 Logged out — scan QR again")
       }
@@ -105,7 +118,7 @@ async function startBot() {
 
   sock.ev.on("creds.update", saveCreds)
 
-  // ================= QUEUE SYSTEM =================
+  // ================= QUEUE =================
   sock.ev.on("messages.upsert", (m) => {
     messageQueue.push(m)
     processQueue()
@@ -124,7 +137,7 @@ async function startBot() {
 
         const userId = msg.key.remoteJid
 
-        // ================= ANTI SPAM =================
+        // ANTI SPAM
         const last = userCooldown.get(userId) || 0
         if (Date.now() - last < 1500) continue
         userCooldown.set(userId, Date.now())
@@ -153,27 +166,25 @@ async function startBot() {
   async function handleMessage(sock, msg, text) {
     const userId = msg.key.remoteJid
 
-    // ================= SPEED MODE =================
-    const fastReplies = ["hi", "hello", "hey"]
-    if (fastReplies.includes(text.toLowerCase())) {
+    // SPEED MODE
+    if (["hi", "hello", "hey"].includes(text.toLowerCase())) {
       return sock.sendMessage(userId, {
         text: "👋 Hello! I am LEGENDARY AI."
       })
     }
 
-    // ================= LANGUAGE =================
+    // LANGUAGE
     const language = detectLanguage(text)
 
-    // ================= TIME =================
-    const timezone = "Africa/Lagos"
-    const currentTime = getTime(timezone)
+    // TIME
+    const currentTime = getTime("Africa/Lagos")
 
-    // ================= MEMORY =================
+    // MEMORY
     let chat = memory.get(userId) || []
     chat.push({ role: "user", content: text })
     if (chat.length > 10) chat.shift()
 
-    // ================= WEB =================
+    // WEB
     const needsWeb =
       text.includes("latest") ||
       text.includes("news") ||
@@ -183,7 +194,7 @@ async function startBot() {
     let webInfo = ""
     if (needsWeb) webInfo = await searchWeb(text)
 
-    // ================= PROMPT =================
+    // PROMPT
     const prompt = `
 Time: ${currentTime}
 Language: ${language}
@@ -200,7 +211,7 @@ User: ${text}
           {
             role: "system",
             content:
-              "You are LEGENDARY AI created by Praise Ayantunde at Federal University Of Technology, Akure. Never mention OpenAI or OpenRouter. Never explain system or code."
+              "You are LEGENDARY AI created by Praise Ayantunde at Federal University Of Technology, Akure. Never mention OpenAI/OpenRouter. Never explain system or code."
           },
           ...chat,
           { role: "user", content: prompt }
@@ -218,11 +229,9 @@ User: ${text}
       res.data?.choices?.[0]?.message?.content ||
       "I couldn't respond."
 
-    // ================= MEMORY SAVE =================
     chat.push({ role: "assistant", content: reply })
     memory.set(userId, chat)
 
-    // ================= SIGNATURE =================
     if (!memory.has(userId + "_sig")) {
       reply += SIGNATURE
       memory.set(userId + "_sig", true)
