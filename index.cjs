@@ -10,8 +10,7 @@ const axios = require("axios")
 const qrcode = require("qrcode-terminal")
 
 // 🔑 OPENROUTER API KEY
-const OPENROUTER_API_KEY = "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"
-
+const OPENROUTER_API_KEY = "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"
 // ✍️ SIGNATURE
 const SIGNATURE =
   "\n\n🤖 *This AI was created by Praise Ayantunde*\n🎓 *A Student of Federal University of Technology, Akure 🎓*"
