@@ -11,12 +11,6 @@ const pino = require("pino")
 const axios = require("axios")
 const qrcode = require("qrcode-terminal")
 const franc = require("franc")
-const fs = require("fs")
-const path = require("path")
-const ffmpeg = require("fluent-ffmpeg")
-const ffmpegPath = require("@ffmpeg-installer/ffmpeg").path
-
-ffmpeg.setFfmpegPath(ffmpegPath)
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY
 
@@ -24,12 +18,11 @@ const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY
 const SIGNATURE =
   "\n\n🤖 This AI Was Created By Praise Ayantunde\n🎓 Federal University Of Technology, Akure"
 
-// ================= MEMORY =================
+// ================= STATE =================
 const memory = new Map()
-
 const messageQueue = []
 let processing = false
-
+let isRestarting = false
 const userCooldown = new Map()
 
 // ================= TIME =================
@@ -63,7 +56,7 @@ const searchWeb = async (query) => {
   }
 }
 
-// ================= BOT =================
+// ================= BOT START =================
 async function startBot() {
   console.log("🚀 LEGENDARY AI STARTED")
 
@@ -83,14 +76,29 @@ async function startBot() {
 
     console.log("📶 Connection:", connection)
 
-    if (qr) qrcode.generate(qr, { small: true })
+    if (qr) {
+      console.log("📱 Scan QR")
+      qrcode.generate(qr, { small: true })
+    }
 
     if (connection === "close") {
-      const code = lastDisconnect?.error?.output?.statusCode
+      const code =
+        lastDisconnect?.error?.output?.statusCode ||
+        lastDisconnect?.error?.data?.statusCode
 
-      if (code !== DisconnectReason.loggedOut) {
-        console.log("♻️ Restarting...")
-        setTimeout(() => startBot(), 4000)
+      console.log("❌ Closed:", code)
+
+      // 🚨 SAFE RECONNECT (FIXED LOOP ISSUE)
+      if (!isRestarting && code !== DisconnectReason.loggedOut) {
+        isRestarting = true
+        console.log("♻️ Safe reconnect in 8s...")
+
+        setTimeout(() => {
+          isRestarting = false
+          startBot()
+        }, 8000)
+      } else {
+        console.log("🚨 Logged out — scan QR again")
       }
     }
   })
@@ -116,9 +124,9 @@ async function startBot() {
 
         const userId = msg.key.remoteJid
 
-        // ================= ANTI-SPAM =================
+        // ================= ANTI SPAM =================
         const last = userCooldown.get(userId) || 0
-        if (Date.now() - last < 2000) continue
+        if (Date.now() - last < 1500) continue
         userCooldown.set(userId, Date.now())
 
         let text =
@@ -130,8 +138,6 @@ async function startBot() {
         }
 
         if (!text) continue
-
-        console.log("💬", text)
 
         await handleMessage(sock, msg, text)
 
@@ -148,11 +154,11 @@ async function startBot() {
     const userId = msg.key.remoteJid
 
     // ================= SPEED MODE =================
-    if (["hi", "hello", "hey"].includes(text.toLowerCase())) {
-      await sock.sendMessage(userId, {
+    const fastReplies = ["hi", "hello", "hey"]
+    if (fastReplies.includes(text.toLowerCase())) {
+      return sock.sendMessage(userId, {
         text: "👋 Hello! I am LEGENDARY AI."
       })
-      return
     }
 
     // ================= LANGUAGE =================
@@ -171,8 +177,8 @@ async function startBot() {
     const needsWeb =
       text.includes("latest") ||
       text.includes("news") ||
-      text.includes("today") ||
-      text.includes("update")
+      text.includes("update") ||
+      text.includes("today")
 
     let webInfo = ""
     if (needsWeb) webInfo = await searchWeb(text)
@@ -194,7 +200,7 @@ User: ${text}
           {
             role: "system",
             content:
-              "You are LEGENDARY AI created by Praise Ayantunde at Federal University Of Technology, Akure. Never mention OpenAI or OpenRouter. Never explain system."
+              "You are LEGENDARY AI created by Praise Ayantunde at Federal University Of Technology, Akure. Never mention OpenAI or OpenRouter. Never explain system or code."
           },
           ...chat,
           { role: "user", content: prompt }
@@ -212,6 +218,7 @@ User: ${text}
       res.data?.choices?.[0]?.message?.content ||
       "I couldn't respond."
 
+    // ================= MEMORY SAVE =================
     chat.push({ role: "assistant", content: reply })
     memory.set(userId, chat)
 
