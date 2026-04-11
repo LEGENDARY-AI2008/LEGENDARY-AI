@@ -13,17 +13,21 @@ const qrcode = require("qrcode-terminal")
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY
 
+// ✍️ SIGNATURE
 const SIGNATURE =
-  "\n\n🤖 *This AI Was Created By Praise Ayantunde*\n🎓 *A Student Of Federal University Of Technology*"
+  "\n\n🤖 This AI Was Created By Praise Ayantunde\n🎓 A Student Of Federal University Of Technology, Akure"
 
-// ⚠️ safe error handling
+// ⚠️ ERROR HANDLING
 process.on("uncaughtException", (err) => {
   console.log("⚠️ Error:", err.message)
 })
 
 process.on("unhandledRejection", (err) => {
-  console.log("⚠️ Rejection:", err)
+  console.log("⚠️ Rejection:", err.message)
 })
+
+// 👇 TRACK USERS (SIGNATURE ONLY ONCE PER CHAT)
+const greetedUsers = new Set()
 
 async function startBot() {
   console.log("🚀 LEGENDARY AI STARTED")
@@ -39,17 +43,6 @@ async function startBot() {
   })
 
   console.log("🔄 Connecting...")
-
-  // 💓 keep alive log
-  setInterval(() => {
-    console.log("💓 Bot still running...")
-  }, 60000)
-
-  // ♻️ 10 MIN AUTO RESTART (SAFE)
-  setTimeout(() => {
-    console.log("♻️ 10 minutes reached — restarting...")
-    process.exit(0)
-  }, 10 * 60 * 1000)
 
   sock.ev.on("connection.update", (update) => {
     const { connection, lastDisconnect, qr } = update
@@ -70,10 +63,13 @@ async function startBot() {
         lastDisconnect?.error?.output?.statusCode ||
         lastDisconnect?.error?.data?.statusCode
 
-      console.log("❌ Closed:", code)
+      console.log("❌ Connection closed:", code)
 
-      if (code === DisconnectReason.loggedOut) {
-        console.log("🚨 Logged out — rescan needed")
+      if (code !== DisconnectReason.loggedOut) {
+        console.log("♻️ Reconnecting in 5 seconds...")
+        setTimeout(() => startBot(), 5000)
+      } else {
+        console.log("🚨 Logged out — scan QR again")
       }
     }
   })
@@ -91,7 +87,7 @@ async function startBot() {
 
       if (!text) return
 
-      console.log("💬", text)
+      console.log("💬 Message:", text)
 
       const response = await axios.post(
         "https://openrouter.ai/api/v1/chat/completions",
@@ -104,7 +100,7 @@ async function startBot() {
             Authorization: `Bearer ${OPENROUTER_API_KEY}`,
             "Content-Type": "application/json",
             "HTTP-Referer": "https://localhost",
-            "X-Title": "Legendary AI"
+            "X-Title": "Legendary AI Bot"
           },
           timeout: 30000
         }
@@ -112,14 +108,20 @@ async function startBot() {
 
       let reply =
         response.data?.choices?.[0]?.message?.content ||
-        "⚠️ No response"
+        "⚠️ AI did not respond"
 
-      reply += SIGNATURE
+      // ✨ SIGNATURE ONLY ON FIRST MESSAGE PER CHAT
+      const userId = msg.key.remoteJid
+
+      if (!greetedUsers.has(userId)) {
+        reply += SIGNATURE
+        greetedUsers.add(userId)
+      }
 
       await sock.sendMessage(msg.key.remoteJid, { text: reply })
 
     } catch (err) {
-      console.log("❌ Error:", err.message)
+      console.log("❌ AI Error:", err.message)
     }
   })
 }
@@ -127,5 +129,7 @@ async function startBot() {
 startBot()
 
 require("http")
-  .createServer((req, res) => res.end("Bot running 🚀"))
+  .createServer((req, res) => {
+    res.end("Bot running 🚀")
+  })
   .listen(process.env.PORT || 3000)
