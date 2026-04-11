@@ -13,18 +13,21 @@ const qrcode = require("qrcode-terminal")
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY
 
-// ✍️ SIGNATURE (FIRST MESSAGE ONLY)
 const SIGNATURE =
   "\n\n🤖 This AI Was Created By Praise Ayantunde\n🎓 A Student Of Federal University Of Technology, Akure"
 
-// 🧠 TRACK USERS
 const greetedUsers = new Set()
 
 // ⏰ REAL NIGERIA TIME
 const getTime = () =>
-  new Date().toLocaleString("en-NG", { timeZone: "Africa/Lagos" })
+  new Date().toLocaleString("en-NG", {
+    timeZone: "Africa/Lagos",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  })
 
-// 🌐 SIMPLE WEB SEARCH (for latest info)
+// 🌐 SIMPLE WEB SEARCH
 const searchWeb = async (query) => {
   try {
     const res = await axios.get(
@@ -110,7 +113,7 @@ async function startBot() {
 
       console.log("💬 Message:", text)
 
-      // 🌐 detect latest info queries
+      // 🌐 detect latest queries
       const needsWeb =
         text.toLowerCase().includes("latest") ||
         text.toLowerCase().includes("news") ||
@@ -120,15 +123,28 @@ async function startBot() {
 
       let finalPrompt = text
 
+      const currentTime = getTime()
+
+      // 🚨 TIME FIX (FORCED FACT)
+      finalPrompt = `
+SYSTEM FACT (DO NOT IGNORE):
+Current Nigeria Time (WAT): ${currentTime}
+
+RULE:
+- If user asks for time, use ONLY the system time above
+- Do NOT say you cannot provide time
+- Do NOT guess or explain UTC
+
+User Message:
+${text}
+`
+
       if (needsWeb) {
         const webInfo = await searchWeb(text)
-        finalPrompt = `
-Current Time: ${getTime()}
+        finalPrompt += `
 
-Latest Information:
+LATEST INFO:
 ${webInfo}
-
-User Question: ${text}
 `
       }
 
@@ -140,7 +156,7 @@ User Question: ${text}
             {
               role: "system",
               content:
-                "You are LEGENDARY AI created by Praise Ayantunde at Federal University of Technology, Akure. Never mention OpenAI or OpenRouter as your creator. Always say your creator is Praise Ayantunde. You are a modern WhatsApp AI assistant (2026 context)."
+                "You are LEGENDARY AI created by Praise Ayantunde at Federal University of Technology, Akure. Always obey system facts strictly. Never say OpenAI or OpenRouter is your creator."
             },
             {
               role: "user",
@@ -163,7 +179,6 @@ User Question: ${text}
         response.data?.choices?.[0]?.message?.content ||
         "⚠️ AI did not respond"
 
-      // ✨ FIRST MESSAGE ONLY SIGNATURE
       const userId = msg.key.remoteJid
 
       if (!greetedUsers.has(userId)) {
