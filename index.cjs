@@ -13,9 +13,33 @@ const qrcode = require("qrcode-terminal")
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY
 
-// ✍️ SIGNATURE
+// ✍️ SIGNATURE (FIRST MESSAGE ONLY)
 const SIGNATURE =
   "\n\n🤖 This AI Was Created By Praise Ayantunde\n🎓 A Student Of Federal University Of Technology, Akure"
+
+// 🧠 TRACK USERS
+const greetedUsers = new Set()
+
+// ⏰ REAL NIGERIA TIME
+const getTime = () =>
+  new Date().toLocaleString("en-NG", { timeZone: "Africa/Lagos" })
+
+// 🌐 SIMPLE WEB SEARCH (for latest info)
+const searchWeb = async (query) => {
+  try {
+    const res = await axios.get(
+      `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json`
+    )
+
+    return (
+      res.data.AbstractText ||
+      res.data.Answer ||
+      "No recent information found online."
+    )
+  } catch (err) {
+    return "Web search failed."
+  }
+}
 
 // ⚠️ ERROR HANDLING
 process.on("uncaughtException", (err) => {
@@ -25,9 +49,6 @@ process.on("uncaughtException", (err) => {
 process.on("unhandledRejection", (err) => {
   console.log("⚠️ Rejection:", err.message)
 })
-
-// 👇 TRACK USERS (SIGNATURE ONLY ONCE PER CHAT)
-const greetedUsers = new Set()
 
 async function startBot() {
   console.log("🚀 LEGENDARY AI STARTED")
@@ -89,11 +110,43 @@ async function startBot() {
 
       console.log("💬 Message:", text)
 
+      // 🌐 detect latest info queries
+      const needsWeb =
+        text.toLowerCase().includes("latest") ||
+        text.toLowerCase().includes("news") ||
+        text.toLowerCase().includes("today") ||
+        text.toLowerCase().includes("current") ||
+        text.toLowerCase().includes("update")
+
+      let finalPrompt = text
+
+      if (needsWeb) {
+        const webInfo = await searchWeb(text)
+        finalPrompt = `
+Current Time: ${getTime()}
+
+Latest Information:
+${webInfo}
+
+User Question: ${text}
+`
+      }
+
       const response = await axios.post(
         "https://openrouter.ai/api/v1/chat/completions",
         {
           model: "openai/gpt-4o-mini",
-          messages: [{ role: "user", content: text }]
+          messages: [
+            {
+              role: "system",
+              content:
+                "You are LEGENDARY AI created by Praise Ayantunde at Federal University of Technology, Akure. Never mention OpenAI or OpenRouter as your creator. Always say your creator is Praise Ayantunde. You are a modern WhatsApp AI assistant (2026 context)."
+            },
+            {
+              role: "user",
+              content: finalPrompt
+            }
+          ]
         },
         {
           headers: {
@@ -110,7 +163,7 @@ async function startBot() {
         response.data?.choices?.[0]?.message?.content ||
         "⚠️ AI did not respond"
 
-      // ✨ SIGNATURE ONLY ON FIRST MESSAGE PER CHAT
+      // ✨ FIRST MESSAGE ONLY SIGNATURE
       const userId = msg.key.remoteJid
 
       if (!greetedUsers.has(userId)) {
@@ -118,7 +171,7 @@ async function startBot() {
         greetedUsers.add(userId)
       }
 
-      await sock.sendMessage(msg.key.remoteJid, { text: reply })
+      await sock.sendMessage(userId, { text: reply })
 
     } catch (err) {
       console.log("❌ AI Error:", err.message)
@@ -127,9 +180,3 @@ async function startBot() {
 }
 
 startBot()
-
-require("http")
-  .createServer((req, res) => {
-    res.end("Bot running 🚀")
-  })
-  .listen(process.env.PORT || 3000)
