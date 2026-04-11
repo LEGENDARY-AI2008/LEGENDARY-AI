@@ -14,7 +14,7 @@ const qrcode = require("qrcode-terminal")
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY
 
 const SIGNATURE =
-  "\n\n🤖 This AI was created by Praise Ayantunde\n🎓 Student of Innovation & Technology"
+  "\n\n🤖 *This AI Was Created By Praise Ayantunde*\n🎓 *A Student Of Federal University Of Technology*"
 
 // ⚠️ safe error handling
 process.on("uncaughtException", (err) => {
