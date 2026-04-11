@@ -1,3 +1,4 @@
+require("dotenv").config()
 const {
   default: makeWASocket,
   useMultiFileAuthState,
@@ -10,7 +11,7 @@ const axios = require("axios")
 const qrcode = require("qrcode-terminal")
 
 // 🔑 OPENROUTER API KEY
-const OPENROUTER_API_KEY = "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"
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY
 // ✍️ SIGNATURE
 const SIGNATURE =
   "\n\n🤖 *This AI was created by Praise Ayantunde*\n🎓 *A Student of Federal University of Technology, Akure 🎓*"
