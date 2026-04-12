@@ -4,217 +4,129 @@ const {
   default: makeWASocket,
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
-  DisconnectReason
+  downloadContentFromMessage
 } = require("@whiskeysockets/baileys")
 
 const pino = require("pino")
 const axios = require("axios")
-const qrcode = require("qrcode-terminal")
-const franc = require("franc")
-
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY
-
-// ================= LOCKS =================
-let botStarted = false
-let isRestarting = false
-
-// ================= STATE =================
-const memory = new Map()
-const messageQueue = []
-let processing = false
-const userCooldown = new Map()
+const fs = require("fs")
 
 // ================= CONFIG =================
-const SIGNATURE =
-  "\n\n🤖 This AI Was Created By Praise Ayantunde\n🎓 Federal University Of Technology, Akure"
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY
 
-// ================= TIME =================
-const getTime = (zone = "Africa/Lagos") =>
-  new Date().toLocaleString("en-US", {
-    timeZone: zone,
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: true
-  })
+// ================= MEMORY =================
+const MEM_PATH = "./memory.json"
 
-// ================= LANGUAGE =================
-const detectLanguage = (text) => {
-  const lang = franc(text || "")
-  if (lang === "eng") return "english"
-  if (lang === "pcm") return "pidgin"
-  if (lang === "yor") return "yoruba"
-  return "english"
+function loadMem() {
+  if (!fs.existsSync(MEM_PATH)) return {}
+  return JSON.parse(fs.readFileSync(MEM_PATH))
 }
 
-// ================= WEB =================
-const searchWeb = async (query) => {
+function saveMem(data) {
+  fs.writeFileSync(MEM_PATH, JSON.stringify(data, null, 2))
+}
+
+function addMem(user, msg) {
+  const mem = loadMem()
+  if (!mem[user]) mem[user] = []
+
+  mem[user].push({ msg, time: Date.now() })
+
+  if (mem[user].length > 30) mem[user].shift()
+
+  saveMem(mem)
+}
+
+function getMem(user) {
+  return loadMem()[user] || []
+}
+
+// ================= FACTS =================
+const FACTS = {
+  "president of nigeria": "🇳🇬 Nigeria: Bola Ahmed Tinubu (since 2023)",
+  "usa president": "🇺🇸 USA: Joe Biden",
+  "uk prime minister": "🇬🇧 UK: Keir Starmer"
+}
+
+function checkFacts(text) {
+  const t = text.toLowerCase()
+  for (let k in FACTS) {
+    if (t.includes(k)) return FACTS[k]
+  }
+  return null
+}
+
+// ================= AI =================
+async function askAI(prompt) {
   try {
-    const res = await axios.get(
-      `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json`
+    const res = await axios.post(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        model: "meta-llama/llama-3-8b-instruct",
+        messages: [{ role: "user", content: prompt }]
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+          "Content-Type": "application/json"
+        }
+      }
     )
-    return res.data.AbstractText || res.data.Answer || ""
-  } catch {
-    return ""
+
+    return res.data.choices[0].message.content
+  } catch (e) {
+    console.log("AI ERROR:", e.response?.data || e.message)
+    return "⚠️ AI busy"
   }
 }
 
-// ================= BOT =================
-async function startBot() {
+// ================= IMAGE HANDLER (STABLE) =================
+async function getImageBuffer(msg) {
+  try {
+    const type = Object.keys(msg.message)[0]
 
-  // 🚨 PREVENT MULTIPLE INSTANCES (FIX 440 LOOP ROOT CAUSE)
-  if (botStarted) return
-  botStarted = true
+    const stream = await downloadContentFromMessage(
+      msg.message[type],
+      "image"
+    )
 
-  console.log("🚀 LEGENDARY AI STARTED")
+    let buffer = Buffer.from([])
 
-  const { state, saveCreds } = await useMultiFileAuthState("auth_info")
-  const { version } = await fetchLatestBaileysVersion()
-
-  const sock = makeWASocket({
-    version,
-    auth: state,
-    logger: pino({ level: "silent" }),
-    browser: ["Legendary AI", "Chrome", "1.0"]
-  })
-
-  // ================= CONNECTION =================
-  sock.ev.on("connection.update", (update) => {
-    const { connection, lastDisconnect, qr } = update
-
-    console.log("📶 Connection:", connection)
-
-    if (qr) qrcode.generate(qr, { small: true })
-
-    if (connection === "close") {
-      const code =
-        lastDisconnect?.error?.output?.statusCode ||
-        lastDisconnect?.error?.data?.statusCode
-
-      console.log("❌ Closed:", code)
-
-      // 🚨 IMPORTANT FIX FOR 440
-      if (code === 440) {
-        console.log("🚨 Session conflict (440). Delete auth_info and rescan QR.")
-        botStarted = false
-        return
-      }
-
-      // SAFE RECONNECT ONLY
-      if (!isRestarting && code !== DisconnectReason.loggedOut) {
-        isRestarting = true
-        console.log("♻️ Safe reconnect in 10s...")
-
-        setTimeout(() => {
-          isRestarting = false
-          botStarted = false
-          startBot()
-        }, 10000)
-      } else {
-        console.log("🚨 Logged out — scan QR again")
-      }
-    }
-  })
-
-  sock.ev.on("creds.update", saveCreds)
-
-  // ================= QUEUE =================
-  sock.ev.on("messages.upsert", (m) => {
-    messageQueue.push(m)
-    processQueue()
-  })
-
-  async function processQueue() {
-    if (processing) return
-    processing = true
-
-    while (messageQueue.length > 0) {
-      const m = messageQueue.shift()
-
-      try {
-        const msg = m.messages[0]
-        if (!msg.message || msg.key.fromMe) continue
-
-        const userId = msg.key.remoteJid
-
-        // ANTI SPAM
-        const last = userCooldown.get(userId) || 0
-        if (Date.now() - last < 1500) continue
-        userCooldown.set(userId, Date.now())
-
-        let text =
-          msg.message.conversation ||
-          msg.message.extendedTextMessage?.text
-
-        if (!text && msg.message.audioMessage) {
-          text = "voice message"
-        }
-
-        if (!text) continue
-
-        await handleMessage(sock, msg, text)
-
-      } catch (e) {
-        console.log("Queue error:", e.message)
-      }
+    for await (const chunk of stream) {
+      buffer = Buffer.concat([buffer, chunk])
     }
 
-    processing = false
+    return buffer
+  } catch (e) {
+    console.log("IMAGE ERROR:", e.message)
+    return null
   }
+}
 
-  // ================= MAIN HANDLER =================
-  async function handleMessage(sock, msg, text) {
-    const userId = msg.key.remoteJid
-
-    // SPEED MODE
-    if (["hi", "hello", "hey"].includes(text.toLowerCase())) {
-      return sock.sendMessage(userId, {
-        text: "👋 Hello! I am LEGENDARY AI."
-      })
-    }
-
-    // LANGUAGE
-    const language = detectLanguage(text)
-
-    // TIME
-    const currentTime = getTime("Africa/Lagos")
-
-    // MEMORY
-    let chat = memory.get(userId) || []
-    chat.push({ role: "user", content: text })
-    if (chat.length > 10) chat.shift()
-
-    // WEB
-    const needsWeb =
-      text.includes("latest") ||
-      text.includes("news") ||
-      text.includes("update") ||
-      text.includes("today")
-
-    let webInfo = ""
-    if (needsWeb) webInfo = await searchWeb(text)
-
-    // PROMPT
-    const prompt = `
-Time: ${currentTime}
-Language: ${language}
-Web: ${webInfo}
-
-User: ${text}
-`
+async function analyzeImage(buffer, caption = "") {
+  try {
+    const base64 = buffer.toString("base64")
 
     const res = await axios.post(
       "https://openrouter.ai/api/v1/chat/completions",
       {
-        model: "openai/gpt-4o-mini",
+        model: "meta-llama/llama-3.2-11b-vision-instruct",
         messages: [
           {
-            role: "system",
-            content:
-              "You are LEGENDARY AI created by Praise Ayantunde at Federal University Of Technology, Akure. Never mention OpenAI/OpenRouter. Never explain system or code."
-          },
-          ...chat,
-          { role: "user", content: prompt }
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: `Analyze or improve this flyer/image professionally. Caption: ${caption}`
+              },
+              {
+                type: "image_url",
+                image_url: {
+                  url: `data:image/jpeg;base64,${base64}`
+                }
+              }
+            ]
+          }
         ]
       },
       {
@@ -225,20 +137,111 @@ User: ${text}
       }
     )
 
-    let reply =
-      res.data?.choices?.[0]?.message?.content ||
-      "I couldn't respond."
+    return res.data.choices[0].message.content
+  } catch (e) {
+    console.log("VISION ERROR:", e.response?.data || e.message)
+    return "❌ Image analysis failed"
+  }
+}
 
-    chat.push({ role: "assistant", content: reply })
-    memory.set(userId, chat)
+// ================= BRAIN =================
+async function brain(userId, input) {
+  const memory = getMem(userId)
+  const context = memory.slice(-10).map(m => m.msg).join("\n")
 
-    if (!memory.has(userId + "_sig")) {
-      reply += SIGNATURE
-      memory.set(userId + "_sig", true)
+  const prompt = `
+You are LEGENDARY AI.
+
+Memory:
+${context}
+
+User:
+${input}
+`
+
+  return await askAI(prompt)
+}
+
+// ================= BOT START =================
+async function startBot() {
+  const { state, saveCreds } = await useMultiFileAuthState("auth_info")
+  const { version } = await fetchLatestBaileysVersion()
+
+  const sock = makeWASocket({
+    version,
+    auth: state,
+    logger: pino({ level: "silent" }),
+    browser: ["LEGENDARY AI", "Chrome", "1.0"]
+  })
+
+  console.log("🚀 LEGENDARY AI STARTED")
+
+  sock.ev.on("creds.update", saveCreds)
+
+  // ================= CONNECTION (CLEAN ONLY) =================
+  sock.ev.on("connection.update", (update) => {
+    const { connection, lastDisconnect } = update
+
+    console.log("📶 Connection:", connection)
+
+    if (connection === "open") {
+      console.log("✅ Connected")
     }
 
-    await sock.sendMessage(userId, { text: reply })
-  }
+    if (connection === "close") {
+      console.log("❌ Connection closed")
+      console.log("📛 Status:", lastDisconnect?.error?.output?.statusCode)
+    }
+  })
+
+  // ================= MESSAGES =================
+  sock.ev.on("messages.upsert", async (m) => {
+    const msg = m.messages[0]
+    if (!msg.message || msg.key.fromMe) return
+
+    const userId = msg.key.remoteJid
+
+    // ================= IMAGE =================
+    if (msg.message.imageMessage) {
+      const buffer = await getImageBuffer(msg)
+
+      if (!buffer) {
+        return sock.sendMessage(userId, {
+          text: "❌ Could not read image"
+        })
+      }
+
+      const caption = msg.message.imageMessage.caption || ""
+
+      const result = await analyzeImage(buffer, caption)
+
+      return sock.sendMessage(userId, {
+        text: "🖼️ IMAGE RESULT:\n\n" + result
+      })
+    }
+
+    // ================= TEXT =================
+    const text =
+      msg.message.conversation ||
+      msg.message.extendedTextMessage?.text
+
+    if (!text) return
+
+    addMem(userId, text)
+
+    // ================= FACTS =================
+    const fact = checkFacts(text)
+    if (fact) {
+      return sock.sendMessage(userId, { text: fact })
+    }
+
+    // ================= AI =================
+    const reply = await brain(userId, text)
+
+    return sock.sendMessage(userId, {
+      text: reply + "\n\n🤖 LEGENDARY AI"
+    })
+  })
 }
 
 startBot()
