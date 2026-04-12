@@ -22,6 +22,7 @@
     "node-fetch": "^3.3.2",
     "pino": "^8.21.0",
     "qrcode-terminal": "^0.12.0",
-    "readline-sync": "^1.4.10"
+    "readline-sync": "^1.4.10",
+    "unzipper": "^0.12.3"
   }
 }

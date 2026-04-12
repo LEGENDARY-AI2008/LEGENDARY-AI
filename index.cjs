@@ -1,4 +1,11 @@
 require("dotenv").config()
+const fs = require("fs")
+const unzipper = require("unzipper")
+
+if (fs.existsSync("auth_info.zip")) {
+  fs.createReadStream("auth_info.zip")
+    .pipe(unzipper.Extract({ path: "." }))
+}
 
 const express = require("express")
 const app = express()
