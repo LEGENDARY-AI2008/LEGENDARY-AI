@@ -1,86 +1,82 @@
+require("dotenv").config()
+
 const express = require("express")
 const app = express()
-
-const PORT = process.env.PORT || 3000
-
-app.get("/", (req, res) => {
-  res.send("LEGENDARY AI is running 🤖")
-})
-
-app.listen(PORT, () => {
-  console.log("🌐 Web server running on port", PORT)
-})
-
-require("dotenv").config()
 
 const {
   default: makeWASocket,
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
-  downloadContentFromMessage
+  DisconnectReason,
+  downloadMediaMessage
 } = require("@whiskeysockets/baileys")
 
-const pino = require("pino")
 const axios = require("axios")
-const fs = require("fs")
+const pino = require("pino")
+const qrcode = require("qrcode-terminal")
 
-// ================= CONFIG =================
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY
+// ================= SERVER =================
+const PORT = process.env.PORT || 3000
+app.get("/", (_, res) => res.send("LEGENDARY AI ONLINE 🚀"))
+app.listen(PORT, () => console.log("🌐 Running on", PORT))
+
+// ================= IDENTITY =================
+const CREATOR =
+"This AI was created and developed by Praise Ayantunde, a student of Federal University of Technology, Akure."
+
+const SYSTEM_PROMPT = `
+You are LEGENDARY AI.
+
+RULES:
+- Never mention OpenAI, Meta, ChatGPT, OpenRouter
+- Never say you are based on another AI system
+- Always behave like an independent AI product
+- Keep responses clean and professional
+`
+
+// ================= STATE =================
+let botStarted = false
+let isConnected = false
+
+const queue = []
+let processing = false
+
+const memoryDB = new Map()
+const firstUsers = new Set()
 
 // ================= MEMORY =================
-const MEM_PATH = "./memory.json"
+function saveMemory(id, text) {
+  if (!memoryDB.has(id)) memoryDB.set(id, [])
+  const mem = memoryDB.get(id)
 
-function loadMem() {
-  if (!fs.existsSync(MEM_PATH)) return {}
-  return JSON.parse(fs.readFileSync(MEM_PATH))
+  mem.push(text)
+  if (mem.length > 10) mem.shift()
 }
 
-function saveMem(data) {
-  fs.writeFileSync(MEM_PATH, JSON.stringify(data, null, 2))
-}
-
-function addMem(user, msg) {
-  const mem = loadMem()
-  if (!mem[user]) mem[user] = []
-
-  mem[user].push({ msg, time: Date.now() })
-
-  if (mem[user].length > 30) mem[user].shift()
-
-  saveMem(mem)
-}
-
-function getMem(user) {
-  return loadMem()[user] || []
-}
-
-// ================= FACTS =================
-const FACTS = {
-  "president of nigeria": "🇳🇬 Nigeria: Bola Ahmed Tinubu (since 2023)",
-  "usa president": "🇺🇸 USA: Joe Biden",
-  "uk prime minister": "🇬🇧 UK: Keir Starmer"
-}
-
-function checkFacts(text) {
-  const t = text.toLowerCase()
-  for (let k in FACTS) {
-    if (t.includes(k)) return FACTS[k]
-  }
-  return null
+function getMemory(id) {
+  return memoryDB.get(id)?.join("\n") || ""
 }
 
 // ================= AI =================
-async function askAI(prompt) {
+async function askAI(text, id) {
   try {
+    const memory = getMemory(id)
+
     const res = await axios.post(
       "https://openrouter.ai/api/v1/chat/completions",
       {
         model: "meta-llama/llama-3-8b-instruct",
-        messages: [{ role: "user", content: prompt }]
+        messages: [
+          {
+            role: "system",
+            content: SYSTEM_PROMPT + "\n\nMemory:\n" + memory
+          },
+          { role: "user", content: text }
+        ]
       },
       {
         headers: {
-          Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
           "Content-Type": "application/json"
         }
       }
@@ -88,26 +84,28 @@ async function askAI(prompt) {
 
     return res.data.choices[0].message.content
   } catch (e) {
-    console.log("AI ERROR:", e.response?.data || e.message)
-    return "⚠️ AI busy"
+    return "⚠️ LEGENDARY AI busy."
   }
 }
 
-// ================= IMAGE HANDLER (STABLE) =================
-async function getImageBuffer(msg) {
+// ================= IMAGE =================
+async function generateImage(prompt) {
   try {
-    const type = Object.keys(msg.message)[0]
-
-    const stream = await downloadContentFromMessage(
-      msg.message[type],
-      "image"
+    const res = await axios.post(
+      "https://api-inference.huggingface.co/models/runwayml/stable-diffusion-v1-5",
+      { inputs: prompt },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.HF_API_KEY}`
+        },
+        responseType: "arraybuffer",
+        validateStatus: () => true
+      }
     )
 
-    let buffer = Buffer.from([])
+    const buffer = Buffer.from(res.data, "binary")
 
-    for await (const chunk of stream) {
-      buffer = Buffer.concat([buffer, chunk])
-    }
+    if (!buffer || buffer.length < 5000) return null
 
     return buffer
   } catch (e) {
@@ -116,67 +114,11 @@ async function getImageBuffer(msg) {
   }
 }
 
-async function analyzeImage(buffer, caption = "") {
-  try {
-    const base64 = buffer.toString("base64")
-
-    const res = await axios.post(
-      "https://openrouter.ai/api/v1/chat/completions",
-      {
-        model: "meta-llama/llama-3.2-11b-vision-instruct",
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: `Analyze or improve this flyer/image professionally. Caption: ${caption}`
-              },
-              {
-                type: "image_url",
-                image_url: {
-                  url: `data:image/jpeg;base64,${base64}`
-                }
-              }
-            ]
-          }
-        ]
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-          "Content-Type": "application/json"
-        }
-      }
-    )
-
-    return res.data.choices[0].message.content
-  } catch (e) {
-    console.log("VISION ERROR:", e.response?.data || e.message)
-    return "❌ Image analysis failed"
-  }
-}
-
-// ================= BRAIN =================
-async function brain(userId, input) {
-  const memory = getMem(userId)
-  const context = memory.slice(-10).map(m => m.msg).join("\n")
-
-  const prompt = `
-You are LEGENDARY AI.
-
-Memory:
-${context}
-
-User:
-${input}
-`
-
-  return await askAI(prompt)
-}
-
-// ================= BOT START =================
+// ================= BOT =================
 async function startBot() {
+  if (botStarted) return
+  botStarted = true
+
   const { state, saveCreds } = await useMultiFileAuthState("auth_info")
   const { version } = await fetchLatestBaileysVersion()
 
@@ -187,74 +129,136 @@ async function startBot() {
     browser: ["LEGENDARY AI", "Chrome", "1.0"]
   })
 
-  console.log("🚀 LEGENDARY AI STARTED")
-
-  sock.ev.on("creds.update", saveCreds)
-
-  // ================= CONNECTION (CLEAN ONLY) =================
+  // ================= CONNECTION =================
   sock.ev.on("connection.update", (update) => {
-    const { connection, lastDisconnect } = update
+    const { connection, lastDisconnect, qr } = update
 
-    console.log("📶 Connection:", connection)
+    console.log("📶", connection)
+
+    if (qr) qrcode.generate(qr, { small: true })
 
     if (connection === "open") {
-      console.log("✅ Connected")
+      isConnected = true
     }
 
     if (connection === "close") {
-      console.log("❌ Connection closed")
-      console.log("📛 Status:", lastDisconnect?.error?.output?.statusCode)
+      isConnected = false
+      const code = lastDisconnect?.error?.output?.statusCode
+
+      if (code !== DisconnectReason.loggedOut) {
+        botStarted = false
+        setTimeout(startBot, 4000)
+      }
     }
   })
+
+  sock.ev.on("creds.update", saveCreds)
 
   // ================= MESSAGES =================
   sock.ev.on("messages.upsert", async (m) => {
-    const msg = m.messages[0]
-    if (!msg.message || msg.key.fromMe) return
+    queue.push(m)
+    processQueue()
+  })
 
-    const userId = msg.key.remoteJid
+  async function processQueue() {
+    if (processing) return
+    processing = true
 
-    // ================= IMAGE =================
-    if (msg.message.imageMessage) {
-      const buffer = await getImageBuffer(msg)
+    while (queue.length > 0) {
+      const m = queue.shift()
+      const msg = m.messages[0]
 
-      if (!buffer) {
+      if (!msg.message || msg.key.fromMe || !isConnected) continue
+
+      const userId = msg.key.remoteJid
+
+      let text =
+        msg.message.conversation ||
+        msg.message.extendedTextMessage?.text
+
+      // ================= IMAGE RECEIVED =================
+      if (msg.message.imageMessage) {
         return sock.sendMessage(userId, {
-          text: "❌ Could not read image"
+          text: "🖼 Image received. Processing upgrade coming soon."
         })
       }
 
-      const caption = msg.message.imageMessage.caption || ""
+      // ================= VOICE =================
+      if (msg.message.audioMessage) {
+        return sock.sendMessage(userId, {
+          text: "🎤 Voice received. Voice AI coming soon."
+        })
+      }
 
-      const result = await analyzeImage(buffer, caption)
+      if (!text) continue
 
-      return sock.sendMessage(userId, {
-        text: "🖼️ IMAGE RESULT:\n\n" + result
+      const lower = text.toLowerCase()
+
+      // ================= CREATOR =================
+      if (
+        lower.includes("who created you") ||
+        lower.includes("who made you")
+      ) {
+        return sock.sendMessage(userId, { text: CREATOR })
+      }
+
+      // ================= IMAGE GENERATION =================
+      if (
+        lower.startsWith("generate image") ||
+        lower.startsWith("create image")
+      ) {
+        const prompt = text.replace(/generate image|create image/i, "").trim()
+
+        const img = await generateImage(prompt)
+
+        if (!img) {
+          return sock.sendMessage(userId, {
+            text: "❌ Image generation failed. Try again."
+          })
+        }
+
+        return sock.sendMessage(userId, {
+          image: img,
+          caption: `🎨 LEGENDARY AI\nPrompt: ${prompt}`
+        })
+      }
+
+      // ================= MEMORY =================
+      saveMemory(userId, text)
+
+      // ================= FIRST USER ONLY =================
+      let isFirst = false
+      if (!firstUsers.has(userId)) {
+        firstUsers.add(userId)
+        isFirst = true
+      }
+
+      const reply = await askAI(text, userId)
+
+      let finalReply = reply
+
+      // REMOVE ANY OLD SIGNATURES
+      finalReply = finalReply.replace(/FUTA Akure/gi, "")
+
+      // ADD SIGNATURE ONLY ON FIRST MESSAGE
+      if (isFirst) {
+        finalReply += `
+
+🤖 LEGENDARY AI
+Created by Praise Ayantunde`
+      }
+
+      await sock.sendPresenceUpdate("composing", userId)
+
+      await new Promise(r => setTimeout(r, 800))
+
+      await sock.sendMessage(userId, {
+        text: finalReply
       })
     }
 
-    // ================= TEXT =================
-    const text =
-      msg.message.conversation ||
-      msg.message.extendedTextMessage?.text
-
-    if (!text) return
-
-    addMem(userId, text)
-
-    // ================= FACTS =================
-    const fact = checkFacts(text)
-    if (fact) {
-      return sock.sendMessage(userId, { text: fact })
-    }
-
-    // ================= AI =================
-    const reply = await brain(userId, text)
-
-    return sock.sendMessage(userId, {
-      text: reply + "\n\n🤖 LEGENDARY AI"
-    })
-  })
+    processing = false
+  }
 }
 
 startBot()
