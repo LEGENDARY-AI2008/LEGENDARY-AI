@@ -1,271 +1,253 @@
 require("dotenv").config()
-const fs = require("fs")
-const unzipper = require("unzipper")
-
-if (fs.existsSync("auth_info.zip")) {
-  fs.createReadStream("auth_info.zip")
-    .pipe(unzipper.Extract({ path: "." }))
-}
-
-const express = require("express")
-const app = express()
 
 const {
   default: makeWASocket,
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
-  DisconnectReason,
-  downloadMediaMessage
+  DisconnectReason
 } = require("@whiskeysockets/baileys")
 
-const axios = require("axios")
-const pino = require("pino")
 const qrcode = require("qrcode-terminal")
+const axios = require("axios")
+const fs = require("fs")
+const translate = require("translate-google")
+const gtts = require("google-tts-api")
+const fetch = require("node-fetch")
+const moment = require("moment-timezone")
 
-// ================= SERVER =================
-const PORT = process.env.PORT || 3000
-app.get("/", (_, res) => res.send("LEGENDARY AI ONLINE 🚀"))
-app.listen(PORT, () => console.log("🌐 Running on", PORT))
-
-// ================= IDENTITY =================
-const CREATOR =
-"This AI was created and developed by Praise Ayantunde, a student of Federal University of Technology, Akure."
-
-const SYSTEM_PROMPT = `
-You are LEGENDARY AI.
-
-RULES:
-- Never mention OpenAI, Meta, ChatGPT, OpenRouter
-- Never say you are based on another AI system
-- Always behave like an independent AI product
-- Keep responses clean and professional
-`
-
-// ================= STATE =================
-let botStarted = false
-let isConnected = false
-
-const queue = []
-let processing = false
-
-const memoryDB = new Map()
-const firstUsers = new Set()
+// ================= LIVE DATA =================
+const WIKI = "https://en.wikipedia.org/api/rest_v1/page/summary/"
 
 // ================= MEMORY =================
-function saveMemory(id, text) {
-  if (!memoryDB.has(id)) memoryDB.set(id, [])
-  const mem = memoryDB.get(id)
-
-  mem.push(text)
-  if (mem.length > 10) mem.shift()
-}
+const memory = new Map()
+const MAX_MEMORY = 30
 
 function getMemory(id) {
-  return memoryDB.get(id)?.join("\n") || ""
+  if (!memory.has(id)) memory.set(id, [])
+  return memory.get(id)
+}
+
+function addMemory(id, role, text) {
+  const userMem = getMemory(id)
+  userMem.push({ role, text })
+  if (userMem.length > MAX_MEMORY) userMem.shift()
+}
+
+// ================= SIGNATURE =================
+const firstChat = new Map()
+
+const SIGNATURE =
+"\n\n👤 *This AI was created by Praise Ayantunde*\n🎓 *A student of Federal University of Technology, Akure*"
+
+// ================= TIME =================
+function getGlobalTime(query = "") {
+  const zones = moment.tz.names()
+  const match = zones.find(z => z.toLowerCase().includes(query.toLowerCase()))
+  const zone = match || "Africa/Lagos"
+
+  return {
+    zone,
+    time: moment().tz(zone).format("LLLL")
+  }
+}
+
+// ================= WIKIPEDIA =================
+async function getWikipedia(query) {
+  try {
+    const res = await fetch(WIKI + encodeURIComponent(query))
+    const data = await res.json()
+
+    if (!data || data.title === "Not found.") return null
+
+    return {
+      extract: data.extract,
+      link: data.content_urls?.desktop?.page
+    }
+  } catch {
+    return null
+  }
+}
+
+// ================= VOICE =================
+async function sendVoice(sock, id, text, lang = "en") {
+  try {
+    const url = gtts.getAudioUrl(text, { lang })
+    const res = await fetch(url)
+    const buffer = await res.arrayBuffer()
+
+    await sock.sendMessage(id, {
+      audio: Buffer.from(buffer),
+      mimetype: "audio/mpeg",
+      ptt: true
+    })
+  } catch {
+    await sock.sendMessage(id, { text: "❌ Voice failed" })
+  }
 }
 
 // ================= AI =================
-async function askAI(text, id) {
+async function askAI(text, history) {
   try {
-    const memory = getMemory(id)
-
     const res = await axios.post(
       "https://openrouter.ai/api/v1/chat/completions",
       {
-        model: "meta-llama/llama-3-8b-instruct",
+        model: "openai/gpt-4o-mini",
         messages: [
           {
             role: "system",
-            content: SYSTEM_PROMPT + "\n\nMemory:\n" + memory
+            content:
+              "You are Legendary AI created by Ayantunde Praise Elijah. Never mention OpenAI. Always act current and intelligent."
           },
+          ...history.map(h => ({
+            role: h.role,
+            content: h.text
+          })),
           { role: "user", content: text }
         ]
       },
       {
         headers: {
-          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-          "Content-Type": "application/json"
+          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`
         }
       }
     )
 
     return res.data.choices[0].message.content
-  } catch (e) {
-    return "⚠️ LEGENDARY AI busy."
-  }
-}
-
-// ================= IMAGE =================
-async function generateImage(prompt) {
-  try {
-    const res = await axios.post(
-      "https://api-inference.huggingface.co/models/runwayml/stable-diffusion-v1-5",
-      { inputs: prompt },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.HF_API_KEY}`
-        },
-        responseType: "arraybuffer",
-        validateStatus: () => true
-      }
-    )
-
-    const buffer = Buffer.from(res.data, "binary")
-
-    if (!buffer || buffer.length < 5000) return null
-
-    return buffer
-  } catch (e) {
-    console.log("IMAGE ERROR:", e.message)
-    return null
+  } catch {
+    return "⚠️ AI error"
   }
 }
 
 // ================= BOT =================
 async function startBot() {
-  if (botStarted) return
-  botStarted = true
-
   const { state, saveCreds } = await useMultiFileAuthState("auth_info")
   const { version } = await fetchLatestBaileysVersion()
 
-  const sock = makeWASocket({
-    version,
-    auth: state,
-    logger: pino({ level: "silent" }),
-    browser: ["LEGENDARY AI", "Chrome", "1.0"]
+  const sock = makeWASocket({ auth: state, version })
+
+  sock.ev.on("connection.update", ({ connection, qr }) => {
+    if (qr) qrcode.generate(qr, { small: true })
+    if (connection === "open") console.log("✅ CONNECTED")
   })
 
-  // ================= CONNECTION =================
-  sock.ev.on("connection.update", (update) => {
-    const { connection, lastDisconnect, qr } = update
+  sock.ev.on("messages.upsert", async ({ messages }) => {
+    const msg = messages[0]
+    if (!msg.message || msg.key.fromMe) return
 
-    console.log("📶", connection)
+    const id = msg.key.remoteJid
 
-    if (qr) qrcode.generate(qr, { small: true })
+    let text =
+      msg.message.conversation ||
+      msg.message.extendedTextMessage?.text ||
+      ""
 
-    if (connection === "open") {
-      isConnected = true
+    const lower = text.toLowerCase()
+
+    const history = getMemory(id)
+    addMemory(id, "user", text)
+
+    let isFirst = false
+    if (!firstChat.has(id)) {
+      firstChat.set(id, true)
+      isFirst = true
     }
 
-    if (connection === "close") {
-      isConnected = false
-      const code = lastDisconnect?.error?.output?.statusCode
+    const attachSignature = (r) => (isFirst ? r + SIGNATURE : r)
 
-      if (code !== DisconnectReason.loggedOut) {
-        botStarted = false
-        setTimeout(startBot, 4000)
-      }
+    // ================= CREATOR INFO (FULL) =================
+    if (lower.includes("creator") || lower.includes("who created")) {
+      const reply =
+`👤 *LEGENDARY AI CREATOR PROFILE*
+
+🧠 NAME:
+AYANTUNDE PRAISE ELIJAH (LEGEND)
+
+🇳🇬 COUNTRY/STATE:
+Nigeria / Ondo State
+
+🎓 UNIVERSITY:
+Federal University of Technology, Akure (FUTA)
+
+🏫 SCHOOL:
+School of Earth and Mineral Sciences
+
+📡 DEPARTMENT:
+Remote Sensing & Geosciences Information Systems
+
+📘 LEVEL:
+100 Level Student
+
+💻 ROLES:
+✔ AI Developer
+✔ Tech Expert
+✔ System Builder
+✔ Founder of LËGĒNDÃRY LAB™ Studio
+✔ Creator of Legendary AI
+
+⚡ STATUS:
+Still building multiple tech and AI systems`
+
+      await sock.sendMessage(id, { text: attachSignature(reply) })
+      return
     }
+
+    // ================= TIME =================
+    if (lower.includes("time") || lower.includes("date")) {
+      const t = getGlobalTime(text)
+
+      await sock.sendMessage(id, {
+        text: attachSignature(`🕒 ${t.zone}\n⏰ ${t.time}`)
+      })
+      return
+    }
+
+    // ================= VOICE =================
+    if (
+      lower.includes("voice") ||
+      lower.includes("send voice")
+    ) {
+      const clean = text.replace(/voice|send voice/gi, "").trim()
+      await sendVoice(sock, id, clean || "Hello", "en")
+      return
+    }
+
+    // ================= 🔥 WIKIPEDIA FIRST (FIXED) =================
+let query = text
+
+// if starts with /
+if (text.startsWith("/")) {
+  query = text.slice(1)
+}
+
+// 🔥 CLEAN QUERY (VERY IMPORTANT)
+query = query
+  .replace(/[^a-zA-Z0-9 ]/g, "")
+  .replace(/who is|what is|tell me|about|current|the|a|an/gi, "")
+  .trim()
+
+const wiki = await getWikipedia(query)
+
+if (wiki) {
+  const reply = `📚 WIKIPEDIA\n\n${wiki.extract}\n\n🔗 ${wiki.link}`
+
+  await sock.sendMessage(id, {
+    text: attachSignature(reply)
+  })
+
+  return
+}
+
+    // ================= AI FALLBACK =================
+    const ai = await askAI(text, history)
+
+    addMemory(id, "assistant", ai)
+
+    await sock.sendMessage(id, {
+      text: attachSignature(ai)
+    })
   })
 
   sock.ev.on("creds.update", saveCreds)
-
-  // ================= MESSAGES =================
-  sock.ev.on("messages.upsert", async (m) => {
-    queue.push(m)
-    processQueue()
-  })
-
-  async function processQueue() {
-    if (processing) return
-    processing = true
-
-    while (queue.length > 0) {
-      const m = queue.shift()
-      const msg = m.messages[0]
-
-      if (!msg.message || msg.key.fromMe || !isConnected) continue
-
-      const userId = msg.key.remoteJid
-
-      let text =
-        msg.message.conversation ||
-        msg.message.extendedTextMessage?.text
-
-      // ================= IMAGE RECEIVED =================
-      if (msg.message.imageMessage) {
-        return sock.sendMessage(userId, {
-          text: "🖼 Image received. Processing upgrade coming soon."
-        })
-      }
-
-      // ================= VOICE =================
-      if (msg.message.audioMessage) {
-        return sock.sendMessage(userId, {
-          text: "🎤 Voice received. Voice AI coming soon."
-        })
-      }
-
-      if (!text) continue
-
-      const lower = text.toLowerCase()
-
-      // ================= CREATOR =================
-      if (
-        lower.includes("who created you") ||
-        lower.includes("who made you")
-      ) {
-        return sock.sendMessage(userId, { text: CREATOR })
-      }
-
-      // ================= IMAGE GENERATION =================
-      if (
-        lower.startsWith("generate image") ||
-        lower.startsWith("create image")
-      ) {
-        const prompt = text.replace(/generate image|create image/i, "").trim()
-
-        const img = await generateImage(prompt)
-
-        if (!img) {
-          return sock.sendMessage(userId, {
-            text: "❌ Image generation failed. Try again."
-          })
-        }
-
-        return sock.sendMessage(userId, {
-          image: img,
-          caption: `🎨 LEGENDARY AI\nPrompt: ${prompt}`
-        })
-      }
-
-      // ================= MEMORY =================
-      saveMemory(userId, text)
-
-      // ================= FIRST USER ONLY =================
-      let isFirst = false
-      if (!firstUsers.has(userId)) {
-        firstUsers.add(userId)
-        isFirst = true
-      }
-
-      const reply = await askAI(text, userId)
-
-      let finalReply = reply
-
-      // REMOVE ANY OLD SIGNATURES
-      finalReply = finalReply.replace(/FUTA Akure/gi, "")
-
-      // ADD SIGNATURE ONLY ON FIRST MESSAGE
-      if (isFirst) {
-        finalReply += `
-
-🤖 LEGENDARY AI
-Created by Praise Ayantunde`
-      }
-
-      await sock.sendPresenceUpdate("composing", userId)
-
-      await new Promise(r => setTimeout(r, 800))
-
-      await sock.sendMessage(userId, {
-        text: finalReply
-      })
-    }
-
-    processing = false
-  }
 }
 
 startBot()
