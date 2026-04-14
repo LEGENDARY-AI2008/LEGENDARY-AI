@@ -269,8 +269,6 @@ if (wiki) {
 
 startBot()
 
-
-let users = new Set(
   fs.existsSync("users.json")
     ? JSON.parse(fs.readFileSync("users.json"))
     : []
