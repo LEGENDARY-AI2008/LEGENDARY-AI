@@ -27,7 +27,6 @@ const {
 
 const qrcode = require("qrcode-terminal")
 const axios = require("axios")
-const fs = require("fs")
 const translate = require("translate-google")
 const gtts = require("google-tts-api")
 const fetch = require("node-fetch")
