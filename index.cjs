@@ -269,10 +269,7 @@ if (wiki) {
 
 startBot()
 
-  let users = fs.existsSync("users.json")
-  ? JSON.parse(fs.readFileSync("users.json"))
-  : [];
-
+ 
 sock.ev.on("messages.upsert", async ({ messages }) => {
   const msg = messages[0];
   const sender = msg.key.remoteJid;
