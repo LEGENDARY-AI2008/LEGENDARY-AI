@@ -269,10 +269,9 @@ if (wiki) {
 
 startBot()
 
-  fs.existsSync("users.json")
-    ? JSON.parse(fs.readFileSync("users.json"))
-    : []
-);
+  let users = fs.existsSync("users.json")
+  ? JSON.parse(fs.readFileSync("users.json"))
+  : [];
 
 sock.ev.on("messages.upsert", async ({ messages }) => {
   const msg = messages[0];
