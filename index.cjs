@@ -269,7 +269,6 @@ if (wiki) {
 
 startBot()
 
-const fs = require("fs");
 
 let users = new Set(
   fs.existsSync("users.json")
