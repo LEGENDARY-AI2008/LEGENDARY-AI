@@ -1,3 +1,13 @@
+const fs = require("fs");
+
+let users = new Set(
+  fs.existsSync("users.json")
+    ? JSON.parse(fs.readFileSync("users.json"))
+    : []
+);
+
+const fs = require("fs");
+
 const express = require("express")
 const app = express()
 
@@ -181,7 +191,7 @@ Federal University of Technology, Akure (FUTA)
 School of Earth and Mineral Sciences
 
 📡 DEPARTMENT:
-Remote Sensing & Geosciences Information Systems
+0Remote Sensing & Geosciences Information Systems
 
 📘 LEVEL:
 100 Level Student
@@ -260,3 +270,96 @@ if (wiki) {
 }
 
 startBot()
+
+const fs = require("fs");
+
+let users = new Set(
+  fs.existsSync("users.json")
+    ? JSON.parse(fs.readFileSync("users.json"))
+    : []
+);
+
+sock.ev.on("messages.upsert", async ({ messages }) => {
+  const msg = messages[0];
+  const sender = msg.key.remoteJid;
+
+  if (!sender) return;
+
+  users.add(sender);
+
+  fs.writeFileSync("users.json", JSON.stringify([...users]));
+});
+
+sock.ev.on("messages.upsert", async ({ messages }) => {
+  const msg = messages[0];
+  const sender = msg.key.remoteJid;
+  const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
+
+  if (sender !== "2349056760155@s.whatsapp.net") return;
+
+  if (text === ".stats") {
+    await sock.sendMessage(sender, {
+      text: `👥 Total users chatting bot: ${users.size}`
+    });
+  }
+});
+
+sock.ev.on("messages.upsert", async ({ messages }) => {
+  const msg = messages[0];
+  const sender = msg.key.remoteJid;
+
+  if (!sender) return;
+
+  users.add(sender);
+
+  fs.writeFileSync("users.json", JSON.stringify([...users]));
+});
+sock.ev.on("messages.upsert", async ({ messages }) => {
+  const msg = messages[0];
+  const sender = msg.key.remoteJid;
+  const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
+
+  if (sender !== "2349056760155@s.whatsapp.net") return;
+
+  if (text.startsWith(".broadcast ")) {
+    const message = text.replace(".broadcast ", "");
+
+    for (let user of users) {
+      await sock.sendMessage(user, { text: `📢 ${message}` });
+    }
+
+    await sock.sendMessage(sender, {
+      text: `✅ Sent to ${users.size} users`
+    });
+  }
+});
+const activeUsers = new Map();
+
+sock.ev.on("messages.upsert", async ({ messages }) => {
+  const msg = messages[0];
+  const sender = msg.key.remoteJid;
+
+  if (!sender) return;
+
+  activeUsers.set(sender, Date.now());
+});
+sock.ev.on("messages.upsert", async ({ messages }) => {
+  const msg = messages[0];
+  const sender = msg.key.remoteJid;
+  const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
+
+  if (sender !== "2349056760155@s.whatsapp.net") return;
+
+  if (text === ".active") {
+    const now = Date.now();
+
+    const active = [...activeUsers.entries()]
+      .filter(([u, t]) => now - t < 5 * 60 * 1000)
+      .map(([u]) => u.replace("@s.whatsapp.net", ""))
+      .join("\n");
+
+    await sock.sendMessage(sender, {
+      text: `⚡ ACTIVE USERS\n\n${active || "None"}`
+    });
+  }
+});
