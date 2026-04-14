@@ -1,21 +1,3 @@
-const fs = require("fs");
-
-let users = new Set(
-  fs.existsSync("users.json")
-    ? JSON.parse(fs.readFileSync("users.json"))
-    : []
-);
-
-
-const express = require("express")
-const app = express()
-
-app.get("/", (req, res) => {
-  res.send("LEGENDARY AI is alive 🔥")
-})
-
-app.listen(process.env.PORT || 3000)
-
 require("dotenv").config()
 
 const {
@@ -27,12 +9,13 @@ const {
 
 const qrcode = require("qrcode-terminal")
 const axios = require("axios")
+const fs = require("fs")
 const translate = require("translate-google")
 const gtts = require("google-tts-api")
 const fetch = require("node-fetch")
 const moment = require("moment-timezone")
 
-// ================= LIVE DATA =================
+// ================= WIKI =================
 const WIKI = "https://en.wikipedia.org/api/rest_v1/page/summary/"
 
 // ================= MEMORY =================
@@ -73,7 +56,6 @@ async function getWikipedia(query) {
   try {
     const res = await fetch(WIKI + encodeURIComponent(query))
     const data = await res.json()
-
     if (!data || data.title === "Not found.") return null
 
     return {
@@ -113,7 +95,7 @@ async function askAI(text, history) {
           {
             role: "system",
             content:
-              "You are Legendary AI created by Ayantunde Praise Elijah. Never mention OpenAI. Always act current and intelligent."
+              "You are Legendary AI created by Ayantunde Praise Elijah."
           },
           ...history.map(h => ({
             role: h.role,
@@ -140,11 +122,27 @@ async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState("auth_info")
   const { version } = await fetchLatestBaileysVersion()
 
-  const sock = makeWASocket({ auth: state, version })
+  const sock = makeWASocket({
+    auth: state,
+    version,
+    printQRInTerminal: true
+  })
 
-  sock.ev.on("connection.update", ({ connection, qr }) => {
+  sock.ev.on("connection.update", (update) => {
+    const { connection, lastDisconnect, qr } = update
+
     if (qr) qrcode.generate(qr, { small: true })
-    if (connection === "open") console.log("✅ CONNECTED")
+
+    if (connection === "open") {
+      console.log("✅ CONNECTED")
+    }
+
+    if (connection === "close") {
+      const shouldReconnect =
+        lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut
+
+      if (shouldReconnect) startBot()
+    }
   })
 
   sock.ev.on("messages.upsert", async ({ messages }) => {
@@ -171,7 +169,7 @@ async function startBot() {
 
     const attachSignature = (r) => (isFirst ? r + SIGNATURE : r)
 
-    // ================= CREATOR INFO (FULL) =================
+    // ================= CREATOR =================
     if (lower.includes("creator") || lower.includes("who created")) {
       const reply =
 `👤 *LEGENDARY AI CREATOR PROFILE*
@@ -189,7 +187,7 @@ Federal University of Technology, Akure (FUTA)
 School of Earth and Mineral Sciences
 
 📡 DEPARTMENT:
-0Remote Sensing & Geosciences Information Systems
+Remote Sensing & Geosciences Information Systems
 
 📘 LEVEL:
 100 Level Student
@@ -204,7 +202,9 @@ School of Earth and Mineral Sciences
 ⚡ STATUS:
 Still building multiple tech and AI systems`
 
-      await sock.sendMessage(id, { text: attachSignature(reply) })
+      await sock.sendMessage(id, {
+        text: attachSignature(reply)
+      })
       return
     }
 
@@ -219,44 +219,25 @@ Still building multiple tech and AI systems`
     }
 
     // ================= VOICE =================
-    if (
-      lower.includes("voice") ||
-      lower.includes("send voice")
-    ) {
-      const clean = text.replace(/voice|send voice/gi, "").trim()
+    if (lower.includes("voice")) {
+      const clean = text.replace(/voice/gi, "").trim()
       await sendVoice(sock, id, clean || "Hello", "en")
       return
     }
 
-    // ================= 🔥 WIKIPEDIA FIRST (FIXED) =================
-let query = text
+    // ================= WIKIPEDIA =================
+    let query = text.startsWith("/") ? text.slice(1) : text
+    const wiki = await getWikipedia(query)
 
-// if starts with /
-if (text.startsWith("/")) {
-  query = text.slice(1)
-}
-
-// 🔥 CLEAN QUERY (VERY IMPORTANT)
-query = query
-  .replace(/[^a-zA-Z0-9 ]/g, "")
-  .replace(/who is|what is|tell me|about|current|the|a|an/gi, "")
-  .trim()
-
-const wiki = await getWikipedia(query)
-
-if (wiki) {
-  const reply = `📚 WIKIPEDIA\n\n${wiki.extract}\n\n🔗 ${wiki.link}`
-
-  await sock.sendMessage(id, {
-    text: attachSignature(reply)
-  })
-
-  return
-}
+    if (wiki) {
+      await sock.sendMessage(id, {
+        text: attachSignature(`📚 ${wiki.extract}\n\n🔗 ${wiki.link}`)
+      })
+      return
+    }
 
     // ================= AI FALLBACK =================
     const ai = await askAI(text, history)
-
     addMemory(id, "assistant", ai)
 
     await sock.sendMessage(id, {
@@ -267,90 +248,4 @@ if (wiki) {
   sock.ev.on("creds.update", saveCreds)
 }
 
-startBot()
-
- 
-sock.ev.on("messages.upsert", async ({ messages }) => {
-  const msg = messages[0];
-  const sender = msg.key.remoteJid;
-
-  if (!sender) return;
-
-  users.add(sender);
-
-  fs.writeFileSync("users.json", JSON.stringify([...users]));
-});
-
-sock.ev.on("messages.upsert", async ({ messages }) => {
-  const msg = messages[0];
-  const sender = msg.key.remoteJid;
-  const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
-
-  if (sender !== "2349056760155@s.whatsapp.net") return;
-
-  if (text === ".stats") {
-    await sock.sendMessage(sender, {
-      text: `👥 Total users chatting bot: ${users.size}`
-    });
-  }
-});
-
-sock.ev.on("messages.upsert", async ({ messages }) => {
-  const msg = messages[0];
-  const sender = msg.key.remoteJid;
-
-  if (!sender) return;
-
-  users.add(sender);
-
-  fs.writeFileSync("users.json", JSON.stringify([...users]));
-});
-sock.ev.on("messages.upsert", async ({ messages }) => {
-  const msg = messages[0];
-  const sender = msg.key.remoteJid;
-  const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
-
-  if (sender !== "2349056760155@s.whatsapp.net") return;
-
-  if (text.startsWith(".broadcast ")) {
-    const message = text.replace(".broadcast ", "");
-
-    for (let user of users) {
-      await sock.sendMessage(user, { text: `📢 ${message}` });
-    }
-
-    await sock.sendMessage(sender, {
-      text: `✅ Sent to ${users.size} users`
-    });
-  }
-});
-const activeUsers = new Map();
-
-sock.ev.on("messages.upsert", async ({ messages }) => {
-  const msg = messages[0];
-  const sender = msg.key.remoteJid;
-
-  if (!sender) return;
-
-  activeUsers.set(sender, Date.now());
-});
-sock.ev.on("messages.upsert", async ({ messages }) => {
-  const msg = messages[0];
-  const sender = msg.key.remoteJid;
-  const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
-
-  if (sender !== "2349056760155@s.whatsapp.net") return;
-
-  if (text === ".active") {
-    const now = Date.now();
-
-    const active = [...activeUsers.entries()]
-      .filter(([u, t]) => now - t < 5 * 60 * 1000)
-      .map(([u]) => u.replace("@s.whatsapp.net", ""))
-      .join("\n");
-
-    await sock.sendMessage(sender, {
-      text: `⚡ ACTIVE USERS\n\n${active || "None"}`
-    });
-  }
-});
+startBot()  
