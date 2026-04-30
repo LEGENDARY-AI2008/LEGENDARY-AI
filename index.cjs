@@ -88,14 +88,14 @@ async function sendVoice(sock, id, text, lang = "en") {
 async function askAI(text, history) {
   try {
     const res = await axios.post(
-      "https://openrouter.ai/api/v1/chat/completions",
+      "https://api.groq.ai/v1/ai/completions",
       {
-        model: "openai/gpt-4o-mini",
+        model: "gpt-4o-mini", // your Groq model
         messages: [
           {
             role: "system",
             content:
-              "You are Legendary AI created by Ayantunde Praise Elijah."
+              "You are Legendary AI created by Ayantunde Praise Elijah. Never mention OpenAI. Always act current and intelligent."
           },
           ...history.map(h => ({
             role: h.role,
@@ -106,13 +106,15 @@ async function askAI(text, history) {
       },
       {
         headers: {
-          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`
+          "Authorization": `Bearer ${process.env.GROQ_API_KEY}`,
+          "Content-Type": "application/json"
         }
       }
     )
 
     return res.data.choices[0].message.content
-  } catch {
+  } catch (err) {
+    console.error("Groq AI error:", err.message)
     return "⚠️ AI error"
   }
 }
@@ -248,4 +250,4 @@ Still building multiple tech and AI systems`
   sock.ev.on("creds.update", saveCreds)
 }
 
-startBot()  
+startBot()
