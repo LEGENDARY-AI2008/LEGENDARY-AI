@@ -30,7 +30,10 @@ function getMemory(id) {
 function addMemory(id, role, text) {
   const userMem = getMemory(id)
   userMem.push({ role, text })
-  if (userMem.length > MAX_MEMORY) userMem.shift()
+
+  if (userMem.length > MAX_MEMORY) {
+    userMem.splice(0, userMem.length - MAX_MEMORY)
+  }
 }
 
 // ================= SIGNATURE =================
@@ -90,7 +93,7 @@ async function askAI(text, history) {
     const res = await axios.post(
       "https://api.groq.ai/v1/ai/completions",
       {
-        model: "gpt-4o-mini", // your Groq model
+        model: "gpt-4o-mini",
         messages: [
           {
             role: "system",
@@ -120,14 +123,19 @@ async function askAI(text, history) {
 }
 
 // ================= BOT =================
+let isRunning = false
+
 async function startBot() {
+  if (isRunning) return
+  isRunning = true
+
   const { state, saveCreds } = await useMultiFileAuthState("auth_info")
   const { version } = await fetchLatestBaileysVersion()
 
   const sock = makeWASocket({
     auth: state,
     version,
-    printQRInTerminal: true
+    printQRInTerminal: false // FIXED: prevents QR conflict issues in unstable env
   })
 
   sock.ev.on("connection.update", (update) => {
@@ -137,13 +145,26 @@ async function startBot() {
 
     if (connection === "open") {
       console.log("✅ CONNECTED")
+      isRunning = true
     }
 
     if (connection === "close") {
-      const shouldReconnect =
-        lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut
+      const status = lastDisconnect?.error?.output?.statusCode
 
-      if (shouldReconnect) startBot()
+      const shouldReconnect =
+        status !== DisconnectReason.loggedOut &&
+        status !== 401 &&
+        status !== 403
+
+      console.log("⚠️ Connection closed:", status)
+
+      isRunning = false
+
+      if (shouldReconnect) {
+        setTimeout(() => {
+          startBot()
+        }, 5000) // FIXED: prevents stream conflict
+      }
     }
   })
 
